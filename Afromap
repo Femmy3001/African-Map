@@ -1,0 +1,107 @@
+
+# Install pacman ("package manager") if needed
+if (!require("pacman")) install.packages("pacman")
+
+# Load contributed packages with pacman
+pacman::p_load(pacman, party, psych, rio, tidyverse,readxl,lubridate)
+# pacman: for loading/unloading packages
+# party: for decision trees
+# psych: for many statistical procedures
+# rio: for importing data
+# tidyverse: for so many reasons
+
+#Remove exponents from the whole R session
+options(scipen = 100)
+
+#Import IHME 2019 data
+setwd("~/Desktop/exel")
+df<-read_excel("Maps.xlsx")
+
+#Select and rename columns of interest
+df1 <-df %>% select(2:8, 10) %>% rename(country=location, pf_case=`falciparum_incidence_number (MAP)`, pf_inc_rate=`falciparum_incidence_rate (MAP)`, tb_inc_rate=`tb_incidence_rate (GBD)`, hiv_inc_rate=`hiv_incidence_rate (GBD)`, population=`population (MAP)`) %>% mutate(pf_per_10 = pf_inc_rate *10000 ) %>% mutate_at(.vars=vars(age_group), factor) %>%  glimpse()
+
+#Check that the order of age is correct
+levels(df1$age_group)
+
+#Make a order the age_groups in the right order for plot
+df1 <- df1 %>% mutate (age_group = factor(age_group,levels=c('0-6 Days', '7-27 Days', '28-364 Days', '1 to 4', '5 to 9', '10 to 14', '15 to 19', "20 to 24", '25 to 29', '30 to 34', '35 to 39', '40 to 44', '45 to 49', '50 to 54', '55 to 59', '60 to 64', '65 to 69', '70 to 74', '75 to 79', '80 to 84', '85 to 89', '90 to 94', '95 plus')))
+
+#Round all numerical data to 2 SF
+df1 <- df1 %>% mutate(across(where(is.numeric), round, 2))
+
+
+
+
+#Save the clean data as excel file
+df1 %>% write_excel_csv("clean_GBD_data.xls")
+
+
+
+#Prep data for mapping
+#group by country and sum up case
+df2 <- df1 %>% 
+  group_by(country) %>% 
+  summarise(tot_pf = sum(pf_case)) %>% mutate(across(where(is.numeric), round, 2))
+
+#Load all African countries list because main data does not include all countries the join with df2 and set NA tot_pf to zero 
+afro<-read_excel("afro.xlsx")
+afro <- as_tibble(afro)
+head(df2)
+head(afro)
+df3 <- df2 %>% right_join(afro, by="country")%>%replace(is.na(.), 0)
+
+
+
+# Get data with long and lat coordinates for the world 
+#Join mapdata to orignal data set df3
+
+mapdata <- map_data("world") ##ggplot2
+View(mapdata)
+mapdata <- mapdata %>%rename(country=region)
+mapdata1 <- left_join(mapdata, df3, by="country")
+View(mapdata1)
+
+
+mapdata1<-mapdata1 %>% filter(!is.na(mapdata1$tot_pf)) %>% rename(region=country)
+View(mapdata1)
+
+#Check for countries with republic in name to ensure only African countries are allowed
+see <- mapdata1 %>% filter(str_detect(region, "Republic"))
+unique(see$region)
+
+#Data for geo_text: on country per row
+con_labels <- mapdata1 %>%
+  group_by(region) %>%
+  summarise(
+    long = mean(long), 
+    lat = mean(lat), 
+    mean_pf = mean(tot_pf)
+  )
+
+
+
+
+#Basic map
+map1<-ggplot(mapdata1, aes( x = long, y = lat)) +
+  geom_polygon(aes(group=group, fill = tot_pf), color = "black") +
+  geom_text(aes(label = region), data = con_labels,  size = 2, hjust = 0.5, color ="white",  fontface = "bold") + geom_label(data = con_labels, aes(label = region), size=2, fontface = "bold", color ="black")
+map1
+
+#Improve map
+map2 <- map1 +
+  scale_fill_viridis_c('abs pf cases',direction = -1,  option = "F") +
+  coord_sf(expand=c(0,0)) +
+  labs(x='Longitude',y='Latitude',
+       title="PF malaria in Africa",
+       subtitle='Malaria case',
+       caption=' (2019)')+
+  cowplot::theme_cowplot()+
+  theme(panel.grid.major = element_line(color = gray(.5),
+                                        linetype = 'dashed',
+                                        size = 0.5),
+        panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill=NA,color = 'black', size = 2),
+        panel.ontop = TRUE) 
+
+map2
+ggsave('plot_afro.pdf', dpi = 300, height = 20, width = 20, unit = 'cm')
